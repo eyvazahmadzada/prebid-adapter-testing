@@ -1,0 +1,2 @@
+gulp build --modules=intentIqAnalyticsAdapter,intentIqIdSystem,intentIqRtdModule,appnexusBidAdapter,rubiconBidAdapter,pubmaticBidAdapter,brightcomBidAdapter,id5IdSystem,userId,unifiedIdSystem,pubProvidedIdSystem
+aws s3 cp build/dist/prebid.js s3://iiq-prebid-test/prebid_modules.js --acl public-read
