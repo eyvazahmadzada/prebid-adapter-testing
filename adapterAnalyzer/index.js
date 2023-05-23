@@ -42,7 +42,7 @@ function runWithJsdom(entryFilePath) {
     const FEATURES = {}
     const vm = new NodeVM({
       console: "inherit",
-      sandbox: { window, FEATURES, ...window, 
+      sandbox: { window, FEATURES,  ...window, 
           crypto: {
           getRandomValues: arr => crypto.randomBytes(arr.length)
         } },
@@ -61,4 +61,4 @@ function runWithJsdom(entryFilePath) {
   }).catch((err) => console.error(err))
 }
 
-runWithJsdom("modules/yahoosspBidAdapter.js");
+runWithJsdom("modules/appnexusBidAdapter.js");
