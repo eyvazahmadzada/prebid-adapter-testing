@@ -15,7 +15,6 @@ const MODULE_NAME = "intentIqId";
 const prebidVersion = "$prebid.version$";
 const currentBrowser = detectBrowser().toLowerCase();
 let iiqServerAddress = "https://api.intentiq.com";
-let refreshInMillis = 43200000; // default: 12 hours
 
 export const FIRST_PARTY_KEY = "_iiq_fdata";
 export var FIRST_PARTY_DATA_KEY = "_iiq_fdata";
@@ -77,7 +76,7 @@ export function readData(key) {
  * @param key
  * @param {string} value IntentIQ ID value to sintentIqIdSystem_spec.jstore
  */
-function storeData(key, value) {
+function storeData(key, value, cookieStorageEnabled = false) {
   try {
     logInfo(MODULE_NAME + ": storing data: key=" + key + " value=" + value);
 
@@ -85,10 +84,11 @@ function storeData(key, value) {
       if (storage.hasLocalStorage()) {
         storage.setDataInLocalStorage(key, value);
       }
+
       const expiresStr = new Date(
         Date.now() + PCID_EXPIRY * (60 * 60 * 24 * 1000)
       ).toUTCString();
-      if (storage.cookiesAreEnabled()) {
+      if (storage.cookiesAreEnabled() && cookieStorageEnabled) {
         storage.setCookie(key, value, expiresStr, "LAX");
       }
     }
@@ -185,31 +185,26 @@ export const intentIqIdSubmodule = {
 
     if (!areParamsValid(configParams)) return undefined;
 
+    if (typeof configParams.iiqServerAddress === "string") {
+      iiqServerAddress = configParams.iiqServerAddress;
+    }
+
     if (!FIRST_PARTY_DATA_KEY.includes(configParams.partner)) {
       FIRST_PARTY_DATA_KEY += "_" + configParams.partner;
     }
 
-    let partnerData = readData(FIRST_PARTY_DATA_KEY);
-    const currentAbGroup = readData(GROUP_LS_KEY + "_" + configParams.partner);
-
-    if (partnerData !== null) {
-      partnerData = tryParse(partnerData);
-    }
-
-    let eids = [];
+    let partnerData = tryParse(readData(FIRST_PARTY_DATA_KEY));
 
     if (
-      typeof currentAbGroup === "string" &&
-      currentAbGroup !== WITHOUT_IIQ &&
       partnerData &&
       partnerData.data &&
       partnerData.data !== INVALID_ID &&
       partnerData.data.eids
     ) {
-      eids = partnerData.data.eids;
+      return { pubProvidedId: partnerData.data.eids };
     }
 
-    return { pubProvidedId: eids };
+    return undefined;
   },
   /**
    * performs action to obtain id and return a value in the callback's response argument
@@ -219,16 +214,12 @@ export const intentIqIdSubmodule = {
    */
   getId(config) {
     const configParams = config && config.params;
+    const cookieStorageEnabled =
+      typeof configParams.enableCookieStorage === "boolean"
+        ? configParams.enableCookieStorage
+        : false;
 
     if (!areParamsValid(configParams)) return undefined;
-
-    if (typeof configParams.iiqServerAddress === "string") {
-      iiqServerAddress = configParams.iiqServerAddress;
-    }
-
-    if (typeof configParams.refreshInMillis === "number") {
-      refreshInMillis = configParams.refreshInMillis;
-    }
 
     // Check optional parameters
     if (
@@ -244,13 +235,10 @@ export const intentIqIdSubmodule = {
       configParams.abPercentage = DEFAULT_PERCENTAGE;
     }
 
-    const currentAbGroup = readData(GROUP_LS_KEY + "_" + configParams.partner);
-
-    let currentAbPercentage = readData(
+    const currentAbPercentage = readData(
       PERCENTAGE_LS_KEY + "_" + configParams.partner
     );
-    if (currentAbPercentage !== null)
-      currentAbPercentage = parseInt(currentAbPercentage);
+    const currentAbGroup = readData(GROUP_LS_KEY + "_" + configParams.partner);
 
     // Update group and percentage in LS if user config changed
     if (
@@ -270,10 +258,15 @@ export const intentIqIdSubmodule = {
       configParams.group =
         configParams.abPercentage > getRandom(1, 100) ? WITH_IIQ : WITHOUT_IIQ;
 
-      storeData(GROUP_LS_KEY + "_" + configParams.partner, configParams.group);
+      storeData(
+        GROUP_LS_KEY + "_" + configParams.partner,
+        configParams.group,
+        cookieStorageEnabled
+      );
       storeData(
         PERCENTAGE_LS_KEY + "_" + configParams.partner,
-        configParams.abPercentage
+        configParams.abPercentage,
+        cookieStorageEnabled
       );
 
       logInfo(MODULE_NAME + " New group: " + configParams.group);
@@ -282,46 +275,37 @@ export const intentIqIdSubmodule = {
     // Make group accessible to review
     window.intentIqCurrentGroup = configParams.group;
 
-    if (!FIRST_PARTY_DATA_KEY.includes(configParams.partner)) {
-      FIRST_PARTY_DATA_KEY += "_" + configParams.partner;
-    }
-
-    const partnerDataLs = readData(FIRST_PARTY_DATA_KEY);
-    const partnerData = partnerDataLs ? tryParse(partnerDataLs) : {};
-
     if (configParams.group === WITHOUT_IIQ) {
-      partnerData.data = {};
-      storeData(FIRST_PARTY_DATA_KEY, JSON.stringify(partnerData));
-
       logInfo(MODULE_NAME + 'Group "B". Passive Mode ON.');
       return true;
     }
 
+    if (!FIRST_PARTY_DATA_KEY.includes(configParams.partner)) {
+      FIRST_PARTY_DATA_KEY += "_" + configParams.partner;
+    }
     let rrttStrtTime = 0;
 
     // Read Intent IQ 1st party id or generate it if none exists
-    let firstPartyData = readData(FIRST_PARTY_KEY);
-
-    if (firstPartyData !== null) {
-      firstPartyData = tryParse(firstPartyData);
-    }
-
+    let firstPartyData = tryParse(readData(FIRST_PARTY_KEY));
     if (!firstPartyData || !firstPartyData.pcid) {
       const firstPartyId = generateGUID();
       firstPartyData = { pcid: firstPartyId };
-      storeData(FIRST_PARTY_KEY, JSON.stringify(firstPartyData));
+      storeData(
+        FIRST_PARTY_KEY,
+        JSON.stringify(firstPartyData),
+        cookieStorageEnabled
+      );
     }
 
+    let partnerData = tryParse(readData(FIRST_PARTY_DATA_KEY)) || {};
+
     // use protocol relative urls for http or https
-    let url = `${iiqServerAddress}/profiles_engine/ProfilesEngineServlet?at=39&mi=10&dpi=${configParams.partner}&pt=17&dpn=1&jsver=5.36`;
+    let url = `${iiqServerAddress}/profiles_engine/ProfilesEngineServlet?at=39&mi=10&dpi=${configParams.partner}&pt=17&dpn=1`;
     url += configParams.pcid
       ? "&pcid=" + encodeURIComponent(configParams.pcid)
       : "";
     url += configParams.pai
       ? "&pai=" + encodeURIComponent(configParams.pai)
-      : "";
-    url += configParams.debugIp
-      ? "&ip=" + encodeURIComponent(configParams.debugIp)
       : "";
     url += firstPartyData.pcid
       ? "&iiqidtype=2&iiqpcid=" + encodeURIComponent(firstPartyData.pcid)
@@ -343,9 +327,9 @@ export const intentIqIdSubmodule = {
           let respJson = tryParse(response);
           // If response is a valid json and should save is true
           if (respJson && respJson.ls) {
+            // Store pid field if found in response json
             let shouldUpdateLs = false;
 
-            // Store pid field if found in response json
             if ("pid" in respJson) {
               firstPartyData.pid = respJson.pid;
               shouldUpdateLs = true;
@@ -354,8 +338,6 @@ export const intentIqIdSubmodule = {
             if ("cttl" in respJson) {
               partnerData.cttl = respJson.cttl;
               shouldUpdateLs = true;
-            } else {
-              partnerData.cttl = refreshInMillis;
             }
 
             // If should save and data is empty, means we should save as INVALID_ID
@@ -373,8 +355,16 @@ export const intentIqIdSubmodule = {
 
             if (shouldUpdateLs === true) {
               partnerData.date = Date.now();
-              storeData(FIRST_PARTY_KEY, JSON.stringify(firstPartyData));
-              storeData(FIRST_PARTY_DATA_KEY, JSON.stringify(partnerData));
+              storeData(
+                FIRST_PARTY_KEY,
+                JSON.stringify(firstPartyData),
+                cookieStorageEnabled
+              );
+              storeData(
+                FIRST_PARTY_DATA_KEY,
+                JSON.stringify(partnerData),
+                cookieStorageEnabled
+              );
             }
 
             callback(respJson.data);
